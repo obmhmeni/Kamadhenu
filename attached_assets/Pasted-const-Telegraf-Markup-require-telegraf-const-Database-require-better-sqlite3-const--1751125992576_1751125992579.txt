@@ -1,0 +1,1369 @@
+const { Telegraf, Markup } = require('telegraf');
+const Database = require('better-sqlite3');
+const winston = require('winston');
+
+// Bot token and constants
+const BOT_TOKEN = '7464820064:AAFkLoUlkzVEotmOFflcArfImBqT2LdqkV4';
+const bot = new Telegraf(BOT_TOKEN);
+const ADMIN_CHAT_ID = '6338398272';
+const ALLOWED_CHAT_IDS = ['6338398272', '-1002410173827'];
+const db = new Database('orders.db');
+
+// Logger setup
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp({ format: () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) + ' IST' }),
+    winston.format.printf(({ timestamp, level, message }) => `${timestamp} ${level}: ${message}`)
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'bot.log' }),
+    new winston.transports.Console()
+  ]
+});
+logger.info('Starting bot initialization...');
+
+// Item contacts
+const itemContacts = {
+  'potato SouthDelhi': '6338398272',
+  'tomato CentralDelhi': '1770010257',
+  'onion SouthDelhi': '9789180980',
+  'rice Chennai': '1728097771',
+  'daal Shahdara': '9661378976',
+  'carrot NorthDelhi': '5555555555',
+  'wheat Chennai': '6666666666',
+  'chocolate SouthDelhi': '6338398272',
+  'chocolate Chennai': '5385320149',
+  'Cake SouthDelhi': '6338398272'
+};
+logger.info('✅ Item contacts loaded');
+
+// Translations
+const translations = {
+  English: {
+    welcome: '👋 Welcome to KaamDhenu Bot! Use /menu to get started.',
+    registered: '✅ Registered successfully as {name} from {district}!',
+    profile: '👤 *Your Profile:*\nName: {name}\nPrimary Phone: {primary_phone}\nSecondary Phone: {secondary_phone}\nDistrict: {district}\nRole: {role}{district_role}\nRegistered At: {registered_at}',
+    not_authorized: '❌ You are not authorized to perform this action.',
+    only_admin: '❌ Only the admin can perform this action.',
+    not_district_head: '❌ You are not a district head.',
+    invalid_phone: '❌ Phone numbers must be 10-digit numbers.',
+    invalid_role: '❌ Invalid role. Valid roles: worker, district_head, supplier',
+    district_required: '❌ District is required for district_head role.',
+    role_assigned: '✅ Assigned {role} role to {telegram_id}{district}!',
+    role_notification: '🔔 You have been assigned the role of {role}{district}!',
+    menu: '📋 *Main Menu*',
+    show_products: '🛒 Show Products',
+    view_orders: '📦 View Orders',
+    add_product_usage: '⚠️ Usage: /add_product <name> <qty> <district> <price> <category>',
+    invalid_qty_price: '❌ Quantity and price must be numbers.',
+    product_added: '✅ Product {name} added with quantity {qty} in {district} at price {price} INR (Category: {category}) (Unique Number: {unique_number})',
+    order_placed: '✅ Order placed!\n👤 Name: {name}\n🏠 Address: {address}\n🛒 Order:\n{order_summary}\n💰 Total: {total} INR\n📢 Payment SMS will confirm your order within 6 minutes.',
+    delivery_update: '✅ Delivery update sent for Order ID {order_id}',
+    order_packed: '✅ Order packed for Order ID {order_id}',
+    order_confirmed: '✅ Order ID {order_id} confirmed!\n💰 {amount} INR\n🛒 {order_details}',
+    order_revived: '✅ Order ID {order_id} revived!\n💰 {amount} INR received late.\n🛒 {order_details}',
+    no_matching_order: '❌ No matching order found for Rs.{amount} from {phone}.\nPlease ensure:\n- Payment amount matches order total.\n- Phone number is your registered primary or secondary phone.\nUse /view_orders to check pending orders.',
+    stock_unavailable: '⚠️ Payment received for Order ID {order_id}, but stock unavailable. Contact admin for refund.',
+    bot_error: '❌ error occurred. Please try again.',
+    invalid_text: '❌ Invalid text. Use commands like /start or send a valid payment SMS.',
+    invalid_sms_format: '❌ Invalid SMS format. Please send a valid payment SMS like "Rs. 100 Credited".',
+    sms_format: '📩 *Payment SMS Format*\nSend a message like: "Rs.100 Credited to A/c ... by {primary_phone}"\n- Amount must match order total (e.g., 100 INR).\n- Use your registered primary ({primary_phone}) or secondary ({secondary_phone}) phone.\nExample: "Rs.100 Credited to A/c ... by {primary_phone}"',
+    unmatched_transactions: '📜 *Unmatched Transactions:*\n{list}',
+    no_unmatched_transactions: '✅ No unmatched transactions found.',
+    low_stock_alert: '⚠️ Low Stock Alert!\nProduct: {name}\nDistrict: {district}\nQuantity: {quantity}\nUnique Number: {unique_number}',
+    threshold_set: '✅ Low stock threshold set to {quantity} units.',
+    invalid_threshold: '❌ Threshold must be a positive number.',
+    invalid_order_format: '❌ Invalid order format. Use:\nName: <name>\nAddress: <address>\n<product> <qty> <district> <added_by> <unique_number>',
+    insufficient_stock: '❌ Insufficient stock for {product} in {district}. Available: {available}, Requested: {requested}',
+    product_not_found: '❌ Product {product} not found in {district} with unique number {unique_number}.',
+    my_info_saved: '✅ Address info saved successfully for {name}! Use /my_info to view.',
+    my_info_not_found: '❌ No address info found. Use /my_info to save your details.\nExample: /my_info Harshit SharmaVilla NearTemple Ward5 Gopalpur Sadar Hazaribagh SouthDelhi Delhi 9551881626 9551881627'
+  }
+};
+
+// Initialize database
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS products (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT,
+      quantity INTEGER,
+      district TEXT,
+      added_by TEXT,
+      price INTEGER,
+      unique_number INTEGER,
+      category TEXT
+    );
+    CREATE TABLE IF NOT EXISTS orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegram_id TEXT,
+      name TEXT,
+      address TEXT,
+      order_details TEXT,
+      product_ids TEXT,
+      total_amount INTEGER,
+      payment_status TEXT DEFAULT 'Pending',
+      order_status TEXT DEFAULT 'Processing',
+      phone TEXT,
+      date_ordered TEXT,
+      created_at TEXT,
+      district TEXT
+    );
+    CREATE TABLE IF NOT EXISTS users (
+      telegram_id TEXT PRIMARY KEY,
+      name TEXT,
+      primary_phone TEXT,
+      secondary_phone TEXT,
+      district TEXT,
+      registered_at TEXT,
+      language TEXT DEFAULT 'English'
+    );
+    CREATE TABLE IF NOT EXISTS roles (
+      telegram_id TEXT,
+      role TEXT,
+      district TEXT,
+      PRIMARY KEY (telegram_id, role)
+    );
+    CREATE TABLE IF NOT EXISTS stock_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER,
+      action TEXT,
+      quantity INTEGER,
+      timestamp TEXT
+    );
+    CREATE TABLE IF NOT EXISTS inventory (
+      product_id INTEGER PRIMARY KEY,
+      stock_value INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS raw_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sms_text TEXT,
+      sender_id TEXT,
+      chat_id TEXT,
+      amount REAL,
+      phone TEXT,
+      status TEXT DEFAULT 'Pending',
+      created_at TEXT,
+      note TEXT,
+      forwarder_phone TEXT
+    );
+    CREATE TABLE IF NOT EXISTS transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount REAL,
+      sender_phone TEXT,
+      upi_id TEXT,
+      transaction_id TEXT,
+      sms_phone TEXT,
+      date_received TEXT,
+      order_id INTEGER,
+      status TEXT DEFAULT 'Pending',
+      created_at TEXT,
+      note TEXT
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+    CREATE TABLE IF NOT EXISTS user_info (
+      telegram_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      house_name TEXT,
+      landmark TEXT,
+      ward_no TEXT,
+      panchayat TEXT,
+      block TEXT,
+      sub_district TEXT,
+      district TEXT NOT NULL,
+      state TEXT NOT NULL,
+      primary_phone TEXT NOT NULL,
+      secondary_phone TEXT,
+      updated_at TEXT
+    );
+  `);
+  db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").run('low_stock_threshold', '100');
+  logger.info('✅ Database schema created');
+} catch (e) {
+  logger.error(`Database initialization failed: ${e.message}`);
+  process.exit(1);
+}
+
+// Insert default roles
+try {
+  db.prepare("INSERT OR IGNORE INTO roles (telegram_id, role) VALUES (?, ?)").run("6338398272", "admin");
+  db.prepare("INSERT OR IGNORE INTO roles (telegram_id, role, district) VALUES (?, ?, ?)").run("5385320149", "district_head", "SouthDelhi");
+  logger.info('✅ Default roles inserted');
+} catch (e) {
+  logger.error(`Failed to insert default roles: ${e.message}`);
+}
+
+// Middleware
+const isWorker = (ctx, next) => {
+  logger.info(`Checking worker role for ${ctx.from.id}`);
+  const row = db.prepare("SELECT role FROM roles WHERE telegram_id = ? AND role IN ('worker', 'admin', 'district_head')").get(ctx.from.id.toString());
+  if (!row) {
+    logger.warn(`Unauthorized access by ${ctx.from.id}: no worker/admin/district_head role`);
+    return ctx.reply(getMessage(ctx, "not_authorized"));
+  }
+  logger.info(`Role verified for ${ctx.from.id}: ${row.role}`);
+  next();
+};
+
+const isAdmin = (ctx, next) => {
+  logger.info(`Checking admin role for ${ctx.from.id}`);
+  const row = db.prepare("SELECT role FROM roles WHERE telegram_id = ? AND role = 'admin'").get(ctx.from.id.toString());
+  if (!row) {
+    logger.warn(`Admin access denied for ${ctx.from.id}`);
+    return ctx.reply(getMessage(ctx, "only_admin"));
+  }
+  logger.info(`Admin role verified for ${ctx.from.id}`);
+  next();
+};
+
+const isDistrictHead = (ctx, next) => {
+  logger.info(`Checking district head role for ${ctx.from.id}`);
+  const row = db.prepare("SELECT role, district FROM roles WHERE telegram_id = ? AND role = 'district_head'").get(ctx.from.id.toString());
+  if (!row) {
+    logger.warn(`District head access denied for ${ctx.from.id}`);
+    return ctx.reply(getMessage(ctx, "not_district_head"));
+  }
+  ctx.districtHead = row.district;
+  logger.info(`District head role verified for ${ctx.from.id}: ${row.district}`);
+  next();
+};
+
+// Utilities
+const getISTTime = () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }).replace(/(\d{2})\/(\d{2})\/(\d{4}),/, '$3-$2-$1');
+
+const getMessage = (ctx, key, params = {}) => {
+  const user = db.prepare("SELECT language FROM users WHERE telegram_id = ?").get(ctx?.from?.id?.toString() || '0');
+  const lang = user ? user.language : 'English';
+  let message = translations[lang][key] || translations['English'][key];
+  for (const [k, v] of Object.entries(params)) message = message.replace(new RegExp(`{${k}}`, 'g'), v);
+  return message;
+};
+
+// Check Low Stock
+const checkLowStock = (productId) => {
+  const threshold = parseInt(db.prepare("SELECT value FROM settings WHERE key = 'low_stock_threshold'").get()?.value || 100);
+  const product = db.prepare("SELECT name, quantity, district, added_by, unique_number FROM products WHERE id = ?").get(productId);
+  if (product && product.quantity < threshold) {
+    const districtHeads = db.prepare("SELECT telegram_id FROM roles WHERE role = 'district_head' AND district = ?").all(product.district);
+    const message = getMessage(null, "low_stock_alert", {
+      name: product.name,
+      district: product.district,
+      quantity: product.quantity,
+      unique_number: product.unique_number
+    });
+    bot.telegram.sendMessage(ADMIN_CHAT_ID, message)
+      .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+    districtHeads.forEach(head => {
+      bot.telegram.sendMessage(head.telegram_id, message)
+        .catch(err => logger.error(`Failed to notify district head ${head.telegram_id}: ${err.message}`));
+    });
+    bot.telegram.sendMessage(product.added_by, message)
+      .catch(err => logger.error(`Failed to notify worker ${product.added_by}: ${err.message}`));
+    logger.info(`Low stock alert sent for product ${product.name} in ${product.district}`);
+  }
+};
+
+// SMS Processing
+async function processPaymentSMS(smsText, ctx) {
+  logger.info(`Processing SMS from ${ctx.from.id} in chat ${ctx.chat.id}: ${smsText}`);
+  let rawTransactionId;
+
+  if (!ALLOWED_CHAT_IDS.includes(ctx.chat.id.toString())) {
+    logger.warn(`Unauthorized payment SMS attempt from chat_id=${ctx.chat.id}, user=${ctx.from.id}: ${smsText}`);
+    ctx.reply('❌ Unauthorized: Only admin or designated group can process payment SMS.');
+    bot.telegram.sendMessage(ADMIN_CHAT_ID, `🚨 Unauthorized payment SMS attempt!\nFrom: ${ctx.from.id}\nChat: ${ctx.chat.id}\nSMS: ${smsText}`)
+      .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+    return null;
+  }
+
+  try {
+    const amountPattern = /Rs\.?\s*(\d+\.?\d*)\s+Credited/i;
+    const amountMatch = amountPattern.exec(smsText);
+    const amount = amountMatch ? parseFloat(amountMatch[1]) : null;
+
+    let phone = null;
+    let forwarderPhone = null;
+    const byPhonePattern = /\bby\s*\+?(\d{10})(?:_\w+)?\b/i;
+    const byPhoneMatch = byPhonePattern.exec(smsText);
+    if (byPhoneMatch) {
+      phone = byPhoneMatch[1];
+      logger.info(`Extracted phone from 'by' pattern: ${phone}`);
+    } else {
+      const fallbackPatterns = [
+        /\b(?!Incoming)\+?\d{10}\b/i,
+        /\(\s*\+?\d{10}\s*\)/i
+      ];
+      for (const pattern of fallbackPatterns) {
+        const match = pattern.exec(smsText);
+        if (match) {
+          phone = match[0].match(/\d{10}/)[0];
+          logger.info(`Extracted fallback phone: ${phone}`);
+          break;
+        }
+      }
+    }
+
+    const incomingPattern = /(?:Incoming\s*-\s*\+?(\d{10}))\b/i;
+    const incomingMatch = incomingPattern.exec(smsText);
+    if (incomingMatch) {
+      forwarderPhone = incomingMatch[1];
+      logger.info(`Extracted forwarder phone: ${forwarderPhone}`);
+    }
+
+    const transactionIdPattern = /UPI\/(\d+)/i;
+    const datePattern = /\((\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2})\)/i;
+    const upiIdPattern = /by (\d{10}_\w+)/i;
+    const transactionIdMatch = transactionIdPattern.exec(smsText);
+    const dateMatch = datePattern.exec(smsText);
+    const upiIdMatch = upiIdPattern.exec(smsText);
+    const transactionId = transactionIdMatch ? transactionIdMatch[1] : null;
+    const dateReceived = dateMatch ? dateMatch[1] : getISTTime();
+    const upiId = upiIdMatch ? upiIdMatch[1] : null;
+
+    rawTransactionId = db.prepare(`
+      INSERT INTO raw_transactions (sms_text, sender_id, chat_id, amount, phone, status, created_at, note, forwarder_phone)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(smsText, ctx.from.id.toString(), ctx.chat.id.toString(), amount, phone, 'Pending', getISTTime(), 'Received', forwarderPhone).lastInsertRowid;
+    logger.info(`Saved raw transaction ID: ${rawTransactionId}`);
+
+    if (!amount) {
+      logger.warn(`No amount found in SMS: ${smsText}`);
+      db.prepare("UPDATE raw_transactions SET status = 'Failed', note = 'No amount found' WHERE id = ?").run(rawTransactionId);
+      ctx.reply(getMessage(ctx, "invalid_sms_format"));
+      return null;
+    }
+
+    if (!phone) {
+      logger.warn(`No valid phone found in SMS: ${smsText}`);
+      db.prepare("UPDATE raw_transactions SET status = 'Failed', note = 'No phone extracted' WHERE id = ?").run(rawTransactionId);
+      ctx.reply("❌ No valid phone number found in SMS.");
+      return null;
+    }
+
+    const users = db.prepare("SELECT telegram_id, primary_phone, secondary_phone FROM users WHERE primary_phone = ? OR secondary_phone = ?").all(phone, phone);
+    if (!users.length) {
+      logger.warn(`No user found for phone: ${phone}`);
+      db.prepare("UPDATE raw_transactions SET status = 'Failed', note = 'No user found for phone' WHERE id = ?").run(rawTransactionId);
+      ctx.reply(`❌ No user registered with phone ${phone}.`);
+      return null;
+    }
+
+    const transactionIdDb = db.prepare(`
+      INSERT INTO transactions (amount, sender_phone, upi_id, transaction_id, sms_phone, date_received, created_at, note)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(amount, phone, upiId, transactionId, phone, dateReceived, getISTTime(), 'Exact amount').lastInsertRowid;
+    logger.info(`Saved transaction ID: ${transactionIdDb}`);
+
+    let matchedOrder = null;
+    for (const user of users) {
+      const orders = db.prepare(`
+        SELECT * FROM orders
+        WHERE total_amount = ?
+        AND (payment_status = 'Pending' OR order_status = 'Cancelled')
+        AND telegram_id = ?
+      `).all(amount, user.telegram_id);
+      matchedOrder = orders[0];
+      if (matchedOrder) {
+        logger.info(`Found matching order ID ${matchedOrder.id} for user ${user.telegram_id}`);
+        break;
+      }
+    }
+
+    if (!matchedOrder) {
+      for (const user of users) {
+        const recentOrders = db.prepare(`
+          SELECT * FROM orders
+          WHERE total_amount = ?
+          AND order_status = 'Cancelled'
+          AND created_at >= datetime('now', '-1 hour')
+          AND telegram_id = ?
+        `).all(amount, user.telegram_id);
+        matchedOrder = recentOrders[0];
+        if (matchedOrder) {
+          logger.info(`Found matching cancelled order ID ${matchedOrder.id} for user ${user.telegram_id}`);
+          break;
+        }
+      }
+    }
+
+    if (!matchedOrder) {
+      logger.warn(`No matching orders for amount ${amount} and phone ${phone}`);
+      db.prepare("UPDATE raw_transactions SET status = 'Failed', note = 'No matching order' WHERE id = ?").run(rawTransactionId);
+      db.prepare("UPDATE transactions SET status = 'Failed', note = 'No matching order' WHERE id = ?").run(transactionIdDb);
+      bot.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Unmatched payment: Rs.${amount} from ${phone}`)
+        .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+      ctx.reply(getMessage(ctx, "no_matching_order", { amount, phone }));
+      return null;
+    }
+
+    let orderItems = matchedOrder.order_details.split("\n").map(line => {
+      const trimmedLine = line.trim();
+      logger.info(`Parsing order_details line: ${trimmedLine}`);
+      if (!trimmedLine) return null;
+      const match = trimmedLine.match(/(\d+) x (\w+) \((.+)\) \[Added By: ([^\],]+)(?:, Unique Number: (\d+))?\]/);
+      if (!match) {
+        logger.error(`Invalid order_details line: ${trimmedLine}`);
+        return null;
+      }
+      logger.info(`Parsed item: qty=${match[1]}, product=${match[2]}, district=${match[3]}, addedBy=${match[4]}, uniqueNumber=${match[5] || 'null'}`);
+      return {
+        qty: parseInt(match[1]),
+        product: match[2],
+        district: match[3].trim(),
+        addedBy: match[4],
+        uniqueNumber: match[5] ? parseInt(match[5]) : null
+      };
+    }).filter(item => item !== null && item.district);
+
+    if (orderItems.length === 0) {
+      logger.error(`No valid order items parsed for Order ID ${matchedOrder.id}`);
+      db.prepare("UPDATE raw_transactions SET status = 'Failed', note = 'Invalid order details' WHERE id = ?").run(rawTransactionId);
+      db.prepare("UPDATE transactions SET status = 'Failed', order_id = ?, note = 'Invalid order details' WHERE id = ?").run(matchedOrder.id, transactionIdDb);
+      ctx.reply(`❌ Order ID ${matchedOrder.id} cannot be processed due to invalid details.`);
+      bot.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Order ID ${matchedOrder.id} failed: Invalid order details`)
+        .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+      return null;
+    }
+
+    if (matchedOrder.order_status === 'Cancelled') {
+      let stockAvailable = true;
+      for (const item of orderItems) {
+        const product = db.prepare("SELECT id, quantity FROM products WHERE LOWER(name) = LOWER(?) AND district = ? AND added_by = ? AND unique_number = ?").get(item.product, item.district, item.addedBy, item.uniqueNumber);
+        if (!product || product.quantity < item.qty) {
+          stockAvailable = false;
+          logger.warn(`Stock unavailable for ${item.product}: ${product ? product.quantity : 0} available, ${item.qty} needed`);
+          break;
+        }
+      }
+      if (!stockAvailable) {
+        db.prepare("UPDATE raw_transactions SET status = 'Failed', note = 'Quantity unavailable' WHERE id = ?").run(rawTransactionId);
+        db.prepare("UPDATE transactions SET status = 'Failed', order_id = ?, note = 'Quantity unavailable' WHERE id = ?").run(matchedOrder.id, transactionIdDb);
+        bot.telegram.sendMessage(matchedOrder.telegram_id, getMessage(ctx, "stock_unavailable", { order_id: matchedOrder.id }))
+          .catch(err => logger.error(`Failed to notify user ${matchedOrder.telegram_id}: ${err.message}`));
+        bot.telegram.sendMessage(ADMIN_CHAT_ID, getMessage(ctx, "stock_unavailable", { order_id: matchedOrder.id }))
+          .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+        return null;
+      }
+      orderItems.forEach(item => {
+        const product = db.prepare("SELECT id FROM products WHERE LOWER(name) = LOWER(?) AND district = ? AND added_by = ? AND unique_number = ?").get(item.product, item.district, item.addedBy, item.uniqueNumber);
+        if (product) {
+          db.prepare("UPDATE products SET quantity = quantity - ? WHERE id = ?").run(item.qty, product.id);
+          db.prepare("INSERT INTO stock_history (product_id, action, quantity, timestamp) VALUES (?, ?, ?, ?)")
+            .run(product.id, "decrease (order revived)", item.qty, getISTTime());
+          checkLowStock(product.id);
+        }
+      });
+    }
+
+    db.prepare("UPDATE orders SET payment_status = 'Completed', order_status = 'Confirmed', date_ordered = ? WHERE id = ?")
+      .run(getISTTime(), matchedOrder.id);
+    db.prepare("UPDATE raw_transactions SET status = 'Matched', note = 'Order confirmed' WHERE id = ?").run(rawTransactionId);
+    db.prepare("UPDATE transactions SET order_id = ?, status = 'Matched' WHERE id = ?")
+      .run(matchedOrder.id, transactionIdDb);
+
+    const productIds = matchedOrder.product_ids ? matchedOrder.product_ids.split(',').map(id => parseInt(id)).filter(id => !isNaN(id)) : [];
+    if (productIds.length > 0) {
+      productIds.forEach(productId => {
+        db.prepare("INSERT OR REPLACE INTO inventory (product_id, stock_value) VALUES (?, COALESCE((SELECT stock_value FROM inventory WHERE product_id = ?), 0) + ?)")
+          .run(productId, productId, amount / productIds.length);
+      });
+    }
+
+    orderItems.forEach(item => {
+      const key = `${item.product} ${item.district}`;
+      const supplier = itemContacts[key] || item.addedBy;
+      if (supplier && supplier !== 'undefined') {
+        bot.telegram.sendMessage(supplier, getMessage(ctx, "order_confirmed", {
+          order_id: matchedOrder.id,
+          amount,
+          order_details: `${item.qty} x ${item.product} (${item.district})`
+        }))
+          .catch(err => logger.error(`Failed to notify supplier ${supplier}: ${err.message}`));
+      }
+    });
+
+    const districts = [...new Set(orderItems.map(item => item.district))].filter(d => d && typeof d === 'string');
+    if (districts.length > 0) {
+      const districtHeads = db.prepare(`SELECT telegram_id FROM roles WHERE role = 'district_head' AND district IN (${districts.map(() => '?').join(',')})`).all(...districts);
+      districtHeads.forEach(head => {
+        bot.telegram.sendMessage(head.telegram_id, getMessage(ctx, "order_confirmed", {
+          order_id: matchedOrder.id,
+          amount,
+          order_details: matchedOrder.order_details
+        }))
+          .catch(err => logger.error(`Failed to notify district head ${head.telegram_id}: ${err.message}`));
+      });
+    }
+
+    bot.telegram.sendMessage(ADMIN_CHAT_ID, getMessage(ctx, "order_confirmed", {
+      order_id: matchedOrder.id,
+      amount,
+      order_details: matchedOrder.order_details
+    }))
+      .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+
+    ctx.reply(getMessage(ctx, "order_confirmed", {
+      order_id: matchedOrder.id,
+      amount,
+      order_details: matchedOrder.order_details
+    }));
+
+    logger.info(`Order ${matchedOrder.id} confirmed successfully`);
+    return matchedOrder.id;
+  } catch (e) {
+    logger.error(`Error processing SMS: ${e.message}`);
+    if (rawTransactionId) {
+      db.prepare("UPDATE raw_transactions SET status = 'Failed', note = ? WHERE id = ?").run(`Error: ${e.message}`, rawTransactionId);
+    }
+    ctx.reply(getMessage(ctx, "bot_error"));
+    return null;
+  }
+}
+
+// Command: List Unmatched Transactions
+bot.command('list_unmatched', isAdmin, async ctx => {
+  logger.info(`Processing /list_unmatched command by ${ctx.from.id}`);
+  try {
+    const transactions = db.prepare("SELECT * FROM raw_transactions WHERE status = 'Failed' ORDER BY created_at DESC LIMIT 10").all();
+    if (!transactions.length) {
+      ctx.reply(getMessage(ctx, "no_unmatched_transactions"));
+      logger.info(`No unmatched transactions found for ${ctx.from.id}`);
+      return;
+    }
+    let list = transactions.map(t => `ID: ${t.id}\nSMS: ${t.sms_text}\nAmount: ${t.amount}\nPhone: ${t.phone}\nForwarder Phone: ${t.forwarder_phone || 'None'}\nNote: ${t.note}\nTime: ${t.created_at}\n---`).join('\n');
+    ctx.reply(getMessage(ctx, "unmatched_transactions", { list }));
+    logger.info(`Unmatched transactions shown to ${ctx.from.id}`);
+  } catch (e) {
+    logger.error(`List_unmatched failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+// Commands
+bot.command('start', ctx => {
+  logger.info(`Processing /start command by ${ctx.from.id}`);
+  ctx.reply(getMessage(ctx, "welcome"));
+});
+
+bot.command('register', ctx => {
+  logger.info(`Processing /register command by ${ctx.from.id}: ${ctx.message.text}`);
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 3) {
+    logger.warn(`Invalid register args: ${ctx.message.text}`);
+    ctx.reply("⚠️ Usage: /register <name> <primary_phone> <district> [secondary_phone]");
+    return;
+  }
+  const [name, primaryPhone, district, secondaryPhone] = args;
+  if (!/^\d{10}$/.test(primaryPhone) || (secondaryPhone && !/^\d{10}$/.test(secondaryPhone))) {
+    logger.warn(`Invalid phone number: ${primaryPhone}, ${secondaryPhone}`);
+    ctx.reply(getMessage(ctx, "invalid_phone"));
+    return;
+  }
+  try {
+    db.prepare("INSERT OR REPLACE INTO users (telegram_id, name, primary_phone, secondary_phone, district, registered_at, language) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(ctx.from.id.toString(), name, primaryPhone, secondaryPhone || null, district, getISTTime(), 'English');
+    ctx.reply(getMessage(ctx, "registered", { name, district }));
+    logger.info(`User ${ctx.from.id} registered as ${name}`);
+  } catch (e) {
+    logger.error(`Register failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('my_info', ctx => {
+  logger.info(`Processing /my_info command by ${ctx.from.id}: ${ctx.message.text}`);
+  const args = ctx.message.text.split(' ').slice(1);
+
+  if (args.length === 0) {
+    try {
+      const userInfo = db.prepare("SELECT * FROM user_info WHERE telegram_id = ?").get(ctx.from.id.toString());
+      if (!userInfo) {
+        logger.warn(`No info found for user: ${ctx.from.id}`);
+        ctx.reply(getMessage(ctx, "my_info_not_found"));
+        return;
+      }
+      const infoMessage = `📍 *Your Address Info:*\n` +
+        `👤 Name: ${userInfo.name}\n` +
+        `🏠 House Name: ${userInfo.house_name || 'None'}\n` +
+        `📍 Landmark: ${userInfo.landmark || 'None'}\n` +
+        `🗳 Ward No: ${userInfo.ward_no || 'None'}\n` +
+        `🌍 Panchayat: ${userInfo.panchayat || 'None'}\n` +
+        `🏢 Block: ${userInfo.block || 'None'}\n` +
+        `🌆 Sub-District: ${userInfo.sub_district || 'None'}\n` +
+        `🌇 District: ${userInfo.district}\n` +
+        `🇮🇳 State: ${userInfo.state}\n` +
+        `📞 Primary Phone: ${userInfo.primary_phone}\n` +
+        `📱 Secondary Phone: ${userInfo.secondary_phone || 'None'}\n` +
+        `⏰ Updated At: ${userInfo.updated_at}`;
+      ctx.replyWithMarkdown(infoMessage);
+      logger.info(`Address info shown to ${ctx.from.id}`);
+    } catch (e) {
+      logger.error(`My_info fetch failed for ${ctx.from.id}: ${e.message}`);
+      ctx.reply(getMessage(ctx, "bot_error"));
+    }
+    return;
+  }
+
+  if (args.length < 9) {
+    logger.warn(`Invalid my_info args: ${ctx.message.text}`);
+    ctx.reply("⚠️ Usage: /my_info <name> <house_name> <landmark> <ward_no> <panchayat> <block> <sub_district> <district> <state> <primary_phone> [secondary_phone]");
+    return;
+  }
+
+  const [
+    name, house_name, landmark, ward_no, panchayat, block, sub_district, district, state, primary_phone, secondary_phone
+  ] = args;
+
+  if (!name || !district || !state || !primary_phone) {
+    logger.warn(`Missing mandatory fields: name=${name}, district=${district}, state=${state}, primary_phone=${primary_phone}`);
+    ctx.reply("❌ Name, district, state, and primary phone are required.");
+    return;
+  }
+
+  if (!/^\d{10}$/.test(primary_phone) || (secondary_phone && !/^\d{10}$/.test(secondary_phone))) {
+    logger.warn(`Invalid phone number: ${primary_phone}, ${secondary_phone}`);
+    ctx.reply(getMessage(ctx, "invalid_phone"));
+    return;
+  }
+
+  try {
+    db.prepare(`
+      INSERT OR REPLACE INTO user_info (
+        telegram_id, name, house_name, landmark, ward_no, panchayat, block, sub_district, district, state, primary_phone, secondary_phone, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      ctx.from.id.toString(), name, house_name || null, landmark || null, ward_no || null, panchayat || null, block || null,
+      sub_district || null, district, state, primary_phone, secondary_phone || null, getISTTime()
+    );
+    ctx.reply(getMessage(ctx, "my_info_saved", { name }));
+    logger.info(`Address info saved for ${ctx.from.id} as ${name}`);
+  } catch (e) {
+    logger.error(`My_info save failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('profile', ctx => {
+  logger.info(`Processing /profile command by ${ctx.from.id}`);
+  try {
+    const user = db.prepare("SELECT * FROM users WHERE telegram_id = ?").get(ctx.from.id.toString());
+    if (!user) {
+      logger.warn(`User not registered: ${ctx.from.id}`);
+      ctx.reply("❌ You are not registered. Use /register to sign up.");
+      return;
+    }
+    const roles = db.prepare("SELECT role, district FROM roles WHERE telegram_id = ?").all(ctx.from.id.toString());
+    const roleStr = roles.length > 0 ? roles.map(r => `${r.role}${r.district ? ` (${r.district})` : ''}`).join(', ') : 'None';
+    const districtRole = roles.find(r => r.district) ? ` (${roles.find(r => r.district).district})` : '';
+    ctx.replyWithMarkdown(getMessage(ctx, "profile", {
+      name: user.name,
+      primary_phone: user.primary_phone,
+      secondary_phone: user.secondary_phone || 'None',
+      district: user.district || 'Unknown',
+      role: roleStr,
+      district_role: districtRole || '',
+      registered_at: user.registered_at
+    }));
+    logger.info(`Profile shown to ${ctx.from.id}`);
+  } catch (e) {
+    logger.error(`Profile failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('assign_role', isAdmin, ctx => {
+  logger.info(`Processing /assign_role command by ${ctx.from.id}: ${ctx.message.text}`);
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 2) {
+    logger.warn(`Invalid assign_role args: ${ctx.message.text}`);
+    ctx.reply("⚠️ Usage: /assign_role <telegram_id> <role> [district]");
+    return;
+  }
+  const [telegram_id, role, district] = args;
+  const validRoles = ['worker', 'client', 'supplier', 'admin', 'district_head'];
+  if (!validRoles.includes(role)) {
+    logger.warn(`Invalid role: ${role}`);
+    ctx.reply(getMessage(ctx, "invalid_role"));
+    return;
+  }
+  if (role === 'district_head' && !district) {
+    logger.warn(`District required for district_head`);
+    ctx.reply(getMessage(ctx, "district_required"));
+    return;
+  }
+  try {
+    db.prepare("DELETE FROM roles WHERE telegram_id = ? AND role = ?").run(telegram_id, role);
+    db.prepare("INSERT INTO roles (telegram_id, role, district) VALUES (?, ?, ?)")
+      .run(telegram_id, role, role === 'district_head' ? district : null);
+    ctx.reply(getMessage(ctx, "role_assigned", { role, telegram_id, district: role === 'district_head' ? ` for ${district}` : '' }));
+    bot.telegram.sendMessage(telegram_id, getMessage(ctx, "role_notification", { role, district: role === 'district_head' ? ` for ${district}` : '' }))
+      .catch(err => logger.error(`Failed to notify user ${telegram_id}: ${err.message}`));
+    logger.info(`Role ${role} assigned to ${telegram_id}`);
+  } catch (e) {
+    logger.error(`Assign_role failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('menu', ctx => {
+  logger.info(`Processing /menu by ${ctx.from.id}`);
+  try {
+    ctx.reply(getMessage(ctx, "menu"), Markup.inlineKeyboard([
+      [Markup.button.callback(getMessage(ctx, "show_products"), 'show_products_action')],
+      [Markup.button.callback(getMessage(ctx, "view_orders"), 'view_orders_action')],
+      [Markup.button.callback("📖 SMS Format", 'sms_format_action')]
+    ]));
+    logger.info(`Menu shown to ${ctx.from.id}`);
+  } catch (e) {
+    logger.error(`Menu failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('sms_format', ctx => {
+  logger.info(`Processing /sms_format command by ${ctx.from.id}`);
+  try {
+    const user = db.prepare("SELECT primary_phone, secondary_phone FROM users WHERE telegram_id = ?").get(ctx.from.id.toString());
+    if (!user) {
+      logger.warn(`User not registered: ${ctx.from.id}`);
+      ctx.reply("❌ Please register with /register");
+      return;
+    }
+    ctx.replyWithMarkdown(getMessage(ctx, "sms_format", { primary_phone: user.primary_phone, secondary_phone: user.secondary_phone || 'None' }));
+    logger.info(`SMS format shown to ${ctx.from.id}`);
+  } catch (e) {
+    logger.error(`SMS_format failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.action('sms_format_action', ctx => {
+  logger.info(`Processing sms_format_action by ${ctx.from.id}`);
+  try {
+    ctx.answerCbQuery();
+    const user = db.prepare("SELECT primary_phone, secondary_phone FROM users WHERE telegram_id = ?").get(ctx.from.id.toString());
+    if (!user) {
+      logger.warn(`User not registered: ${ctx.from.id}`);
+      ctx.reply("❌ Please register with /register");
+      return;
+    }
+    ctx.replyWithMarkdown(getMessage(ctx, "sms_format", { primary_phone: user.primary_phone, secondary_phone: user.secondary_phone || 'None' }));
+    logger.info(`SMS format shown to ${ctx.from.id} via action`);
+  } catch (e) {
+    logger.error(`SMS_format action failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('show_products', ctx => {
+  logger.info(`Processing /show_products command by ${ctx.from.id}`);
+  const args = ctx.message.text.split(' ').slice(1);
+  const districtHead = db.prepare("SELECT district FROM roles WHERE telegram_id = ? AND role = 'district_head'").get(ctx.from.id.toString());
+  let rows;
+  try {
+    if (args.length > 0) {
+      const category = args[0];
+      if (districtHead) {
+        rows = db.prepare("SELECT * FROM products WHERE district = ? AND category = ?").all(districtHead.district, category);
+      } else {
+        rows = db.prepare("SELECT * FROM products WHERE category = ?").all(category);
+      }
+    } else {
+      if (districtHead) {
+        rows = db.prepare("SELECT * FROM products WHERE district = ?").all(districtHead.district);
+      } else {
+        rows = db.prepare("SELECT * FROM products").all();
+      }
+    }
+    if (rows.length === 0) {
+      logger.info(`No products found for ${ctx.from.id}`);
+      ctx.reply("📭 No products available.");
+      return;
+    }
+    let productList = "🛒 *Available Products:*\n\n";
+    rows.forEach(row => {
+      productList += `📌 *Name:* ${row.name}\n📖 *Quantity:* ${row.quantity}\n📍 District: ${row.district}\n💰 *Price:* ${row.price} INR\n📋 Category: ${row.category}\n👤 Added By: ${row.added_by} (Unique Number: ${row.unique_number})\n\n`;
+    });
+    ctx.replyWithMarkdown(productList);
+    logger.info(`Products shown to ${ctx.from.id}`);
+  } catch (err) {
+    logger.error(`Show_products failed for ${ctx.from.id}: ${err.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.action('show_products_action', ctx => {
+  logger.info(`Processing show_products action by ${ctx.from.id}`);
+  try {
+    ctx.answerCbQuery();
+    const districtHead = db.prepare("SELECT district FROM roles WHERE telegram_id = ? AND role = 'district_head'").get(ctx.from.id.toString());
+    let rows;
+    if (districtHead) {
+      rows = db.prepare("SELECT * FROM products WHERE district = ?").all(districtHead.district);
+    } else {
+      rows = db.prepare("SELECT * FROM products").all();
+    }
+    if (rows.length === 0) {
+      logger.info(`No products found for ${ctx.from.id}`);
+      ctx.reply("📭 No products available.");
+      return;
+    }
+    let productList = "🛒 *Available Products:*\n\n";
+    rows.forEach(row => {
+      productList += `📌 *Name:* ${row.name}\n📖 *Quantity:* ${row.quantity}\n📍 District: ${row.district}\n💰 *Price:* ${row.price} INR\n📋 Category: ${row.category}\n👤 Added By: ${row.added_by} (Unique Number: ${row.unique_number})\n\n`;
+    });
+    ctx.replyWithMarkdown(productList);
+    logger.info(`Products shown to ${ctx.from.id} via action`);
+  } catch (e) {
+    logger.error(`Show_products action failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('view_orders', ctx => {
+  logger.info(`Processing /view_orders command by ${ctx.from.id}`);
+  try {
+    const orders = db.prepare("SELECT id, order_details, total_amount, payment_status, order_status FROM orders WHERE telegram_id = ?")
+      .all(ctx.from.id.toString());
+    if (orders.length === 0) {
+      logger.info(`No orders found for ${ctx.from.id}`);
+      ctx.reply("📭 You have no orders yet.");
+      return;
+    }
+    let orderList = "📖 *Your Orders:*\n\n";
+    orders.forEach(order => {
+      orderList += `📖 *Order ID:* ${order.id}\n${order.order_details}\n💰 *Total:* ${order.total_amount} INR\n✅ *Payment Status:* ${order.payment_status}\n📖 *Order Status:* ${order.order_status}\n\n`;
+    });
+    ctx.replyWithMarkdown(orderList);
+    logger.info(`Orders shown to ${ctx.from.id}`);
+  } catch (e) {
+    logger.error(`View_orders failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.action('view_orders_action', ctx => {
+  logger.info(`Processing view_orders_action by ${ctx.from.id}`);
+  try {
+    ctx.answerCbQuery();
+    const orders = db.prepare("SELECT id, order_details, total_amount, payment_status, order_status FROM orders WHERE telegram_id = ?")
+      .all(ctx.from.id.toString());
+    if (orders.length === 0) {
+      logger.info(`No orders found for ${ctx.from.id}`);
+      ctx.reply("📭 You have no orders yet.");
+      return;
+    }
+    let orderList = "📖 *Your Orders:*\n\n";
+    orders.forEach(order => {
+      orderList += `📖 *Order ID:* ${order.id}\n${order.order_details}\n💰 *Total:* ${order.total_amount} INR\n✅ *Payment Status:* ${order.payment_status}\n📖 *Order Status:* ${order.order_status}\n\n`;
+    });
+    ctx.replyWithMarkdown(orderList);
+    logger.info(`Orders shown to ${ctx.from.id} via action`);
+  } catch (e) {
+    logger.error(`View_orders action failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('update_delivery', ctx => {
+  logger.info(`Processing /update_delivery command by ${ctx.from.id}: ${ctx.message.text}`);
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 2) {
+    logger.warn(`Invalid update_delivery args: ${ctx.message.text}`);
+    ctx.reply("⚠️ Usage: /update_delivery <order_id> <message>");
+    return;
+  }
+  const orderId = parseInt(args[0]);
+  const message = args.slice(1).join(' ');
+  if (isNaN(orderId)) {
+    logger.warn(`Invalid order_id: ${orderId}`);
+    ctx.reply("❌ Order ID must be a number.");
+    return;
+  }
+  try {
+    const order = db.prepare("SELECT telegram_id, order_details, product_ids FROM orders WHERE id = ?").get(orderId);
+    if (!order) {
+      logger.warn(`Order not found: ${orderId}`);
+      ctx.reply(`❌ Order ID ${orderId} not found.`);
+      return;
+    }
+    const productIds = order.product_ids ? order.product_ids.split(',').map(id => parseInt(id)).filter(id => !isNaN(id)) : [];
+    const isSupplier = productIds.length > 0 ? db.prepare(`SELECT 1 FROM products WHERE id IN (${productIds.map(() => '?').join(',')}) AND added_by = ?`).get([...productIds, ctx.from.id.toString()]) : null;
+    if (!isSupplier && ctx.from.id.toString() !== ADMIN_CHAT_ID) {
+      logger.warn(`Unauthorized access by ${ctx.from.id}`);
+      ctx.reply(getMessage(ctx, "not_authorized"));
+      return;
+    }
+    bot.telegram.sendMessage(order.telegram_id, `🔔 Delivery Update for Order ID ${orderId}!\nOrder:\n${order.order_details}\nUpdate: ${message}`)
+      .catch(err => logger.error(`Failed to notify user ${order.telegram_id}: ${err.message}`));
+    bot.telegram.sendMessage(ADMIN_CHAT_ID, `🔔 Delivery Update for Order ID ${orderId}!\nOrder:\n${order.order_details}\nUpdate: ${message}\nUpdated By: ${ctx.from.id}`)
+      .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+    ctx.reply(getMessage(ctx, "delivery_update", { order_id: orderId }));
+    logger.info(`Delivery update for Order ID ${orderId} by ${ctx.from.id}`);
+  } catch (e) {
+    logger.error(`Update_delivery failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('your_order_is_packed', ctx => {
+  logger.info(`Processing /your_order_is_packed command by ${ctx.from.id}: ${ctx.message.text}`);
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 1) {
+    logger.warn(`Invalid order_is_packed args: ${ctx.message.text}`);
+    ctx.reply("⚠️ Usage: /your_order_is_packed <order_id>");
+    return;
+  }
+  const orderId = parseInt(args[0]);
+  if (isNaN(orderId)) {
+    logger.warn(`Invalid order_id: ${orderId}`);
+    ctx.reply("❌ Order ID must be a number.");
+    return;
+  }
+  try {
+    const order = db.prepare("SELECT telegram_id, order_details FROM orders WHERE id = ?").get(orderId);
+    if (!order) {
+      logger.warn(`Order not found: ${orderId}`);
+      ctx.reply(`❌ Order ID ${orderId} not found.`);
+      return;
+    }
+    const productIds = order.product_ids ? order.product_ids.split(',').map(id => parseInt(id)).filter(id => !isNaN(id)) : [];
+    const isSupplier = productIds.length > 0 ? db.prepare(`SELECT 1 FROM products WHERE id IN (${productIds.map(() => '?').join(',')}) AND added_by = ?`).get([...productIds, ctx.from.id.toString()]) : null;
+    if (!isSupplier && ctx.from.id.toString() !== ADMIN_CHAT_ID) {
+      logger.warn(`Unauthorized access by ${ctx.from.id}`);
+      ctx.reply(getMessage(ctx, "not_authorized"));
+      return;
+    }
+    bot.telegram.sendMessage(order.telegram_id, `🚚 Order ID ${orderId} is packed!\nOrder:\n${order.order_details}`)
+      .catch(err => logger.error(`Failed to notify user ${order.telegram_id}: ${err.message}`));
+    ctx.reply(getMessage(ctx, "order_packed", { order_id: orderId }));
+    logger.info(`Order ${orderId} packed by ${ctx.from.id}`);
+  } catch (e) {
+    logger.error(`Your_order_is_packed failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('set_low_stock_threshold', isAdmin, ctx => {
+  logger.info(`Processing /set_low_stock_threshold by ${ctx.from.id}: ${ctx.message.text}`);
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 1) {
+    logger.warn(`Invalid threshold args: ${ctx.message.text}`);
+    ctx.reply("⚠️ Usage: /set_low_stock_threshold <quantity>");
+    return;
+  }
+  const threshold = parseInt(args[0]);
+  if (isNaN(threshold) || threshold <= 0) {
+    logger.warn(`Invalid threshold value: ${args[0]}`);
+    ctx.reply(getMessage(ctx, "invalid_threshold"));
+    return;
+  }
+  try {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+      .run('low_stock_threshold', threshold.toString());
+    ctx.reply(getMessage(ctx, "threshold_set", { quantity: threshold }));
+    logger.info(`Low stock threshold set to ${threshold} by ${ctx.from.id}`);
+  } catch (e) {
+    logger.error(`Failed to set threshold: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('add_product', isWorker, ctx => {
+  logger.info(`Processing /add_product command by ${ctx.from.id}: ${ctx.message.text}`);
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 5) {
+    logger.warn(`Invalid add_product args: ${ctx.message.text}`);
+    ctx.reply(getMessage(ctx, "add_product_usage"));
+    return;
+  }
+  const [name, qtyStr, district, priceStr, category] = args;
+  const qty = parseInt(qtyStr);
+  const price = parseInt(priceStr);
+  if (isNaN(qty) || isNaN(price)) {
+    logger.warn(`Invalid qty or price: ${qtyStr}, ${priceStr}`);
+    ctx.reply(getMessage(ctx, "invalid_qty_price"));
+    return;
+  }
+  if (qty <= 0 || price < 0) {
+    logger.warn(`Negative qty or price received: ${qty}, ${price}`);
+    ctx.reply("❌ Quantity must be positive and price non-negative.");
+    return;
+  }
+  try {
+    const existingNumbers = db.prepare("SELECT unique_number FROM products WHERE LOWER(name) = LOWER(?) AND district = ?")
+      .all(name, district)
+      .map(row => row.unique_number)
+      .filter(num => num !== null)
+      .sort((a, b) => a - b);
+    let uniqueNumber = 1;
+    if (existingNumbers.length > 0) {
+      for (let i = 1; i <= existingNumbers.length + 1; i++) {
+        if (!existingNumbers.includes(i)) {
+          uniqueNumber = i;
+          break;
+        }
+      }
+    }
+    const tx = db.transaction(() => {
+      const productId = db.prepare("INSERT INTO products (name, quantity, district, added_by, price, unique_number, category) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(name, qty, district, ctx.from.id.toString(), price, uniqueNumber, category).lastInsertRowid;
+      db.prepare("INSERT INTO stock_history (product_id, action, quantity, timestamp) VALUES (?, ?, ?, ?)")
+        .run(productId, "add", qty, getISTTime());
+      return productId;
+    })();
+    checkLowStock(tx);
+    ctx.reply(getMessage(ctx, "product_added", { name, qty, district, price, category, unique_number: uniqueNumber }));
+    logger.info(`Product ${name} added by ${ctx.from.id} with unique_number ${uniqueNumber}`);
+  } catch (e) {
+    logger.error(`Add_product failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('update_product', isWorker, ctx => {
+  logger.info(`Processing /update_product command by ${ctx.from.id}: ${ctx.message.text}`);
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 7) {
+    logger.warn(`Invalid update_product args: ${ctx.message.text}`);
+    ctx.reply("⚠️ Usage: /update_product <name> <qty> <district> <price> <unique_number> <category> <added_by>");
+    return;
+  }
+  const [name, qtyStr, district, priceStr, uniqueNumberStr, category, addedBy] = args;
+  const qty = parseInt(qtyStr);
+  const price = parseInt(priceStr);
+  const uniqueNumber = parseInt(uniqueNumberStr);
+  if (isNaN(qty) || isNaN(price) || isNaN(uniqueNumber) || uniqueNumber < 1) {
+    logger.warn(`Invalid qty, price, or unique_number: ${qtyStr}, ${priceStr}, ${uniqueNumberStr}`);
+    ctx.reply("❌ Quantity, price, and unique_number must be numbers, and unique_number >= 1.");
+    return;
+  }
+  if (qty < 0 || price < 0) {
+    logger.warn(`Negative qty or price received: ${qty}, ${price}`);
+    ctx.reply("❌ Quantity and price cannot be negative.");
+    return;
+  }
+  if (addedBy !== ctx.from.id.toString()) {
+    logger.warn(`Unauthorized update attempt by ${ctx.from.id}: added_by ${addedBy} does not match`);
+    ctx.reply("❌ You can only update products you added.");
+    return;
+  }
+  try {
+    const product = db.prepare("SELECT id, quantity FROM products WHERE LOWER(name) = LOWER(?) AND district = ? AND added_by = ? AND unique_number = ?").get(name, district, addedBy, uniqueNumber);
+    if (!product) {
+      logger.warn(`Product not found: ${name}, ${district}, ${addedBy}, ${uniqueNumber}`);
+      ctx.reply("❌ Product not found with the given details.");
+      return;
+    }
+    const tx = db.transaction(() => {
+      const result = db.prepare("UPDATE products SET quantity = ?, price = ?, category = ? WHERE id = ?").run(qty, price, category, product.id);
+      if (result.changes > 0) {
+        const newQty = parseInt(qty);
+        const oldQty = parseInt(product.quantity);
+        const action = newQty > oldQty ? 'increment' : 'decrement';
+        const qtyChange = Math.abs(newQty - oldQty);
+        db.prepare("INSERT INTO stock_history (product_id, action, quantity, timestamp) VALUES (?, ?, ?, ?)")
+          .run(product.id, action, qtyChange, getISTTime());
+      }
+      return result.changes > 0;
+    })();
+    if (tx) {
+      checkLowStock(product.id);
+      ctx.reply(`✅ Product ${name} updated successfully!`);
+      logger.info(`Product ${name} updated by ${ctx.from.id}`);
+    } else {
+      logger.warn(`Failed to update product ${name}, ${district}, ${uniqueNumber}`);
+      ctx.reply("❌ Failed to update product.");
+    }
+  } catch (e) {
+    logger.error(`Update_product failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.command('delete_product', isWorker, ctx => {
+  logger.info(`Processing /delete_product command by ${ctx.from.id}: ${ctx.message.text}`);
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 4) {
+    logger.warn(`Invalid delete_product args: ${ctx.message.text}`);
+    ctx.reply("⚠️ Usage: /delete_product <name> <district> <unique_number> <added_by>");
+    return;
+  }
+  const [name, district, uniqueNumberStr, addedBy] = args;
+  const uniqueNumber = parseInt(uniqueNumberStr);
+  if (isNaN(uniqueNumber) || uniqueNumber < 1) {
+    logger.warn(`Invalid unique_number: ${uniqueNumberStr}`);
+    ctx.reply("❌ Unique number must be a number >= 1.");
+    return;
+  }
+  if (addedBy !== ctx.from.id.toString()) {
+    logger.warn(`Unauthorized delete attempt by ${ctx.from.id}: added_by ${addedBy} does not match`);
+    ctx.reply("❌ You can only delete products you added.");
+    return;
+  }
+  try {
+    const product = db.prepare("SELECT id FROM products WHERE LOWER(name) = LOWER(?) AND district = ? AND added_by = ? AND unique_number = ?").get(name, district, addedBy, uniqueNumber);
+    if (!product) {
+      logger.warn(`Product not found: ${name}, ${district}, ${uniqueNumber}, ${addedBy}`);
+      ctx.reply(`❌ Product ${name} not found with the given details.`);
+      return;
+    }
+    const result = db.prepare("DELETE FROM products WHERE id = ?").run(product.id);
+    ctx.reply(result.changes > 0 ? `✅ Product ${name} deleted from ${district}` : "❌ Failed to delete product.");
+    logger.info(`Product ${name} deleted by ${ctx.from.id}`);
+  } catch (e) {
+    logger.error(`Delete_product failed for ${ctx.from.id}: ${e.message}`);
+    ctx.reply(getMessage(ctx.getMessage(ctx, "bot_error"));
+  }
+});
+
+bot.on('text', async ctx => {
+  const text = ctx.message.text.trim();
+  if (text.startsWith('/')) return;
+  logger.info(`Received text from ${ctx.from.id}: ${text}`);
+
+  // SMS Handler
+  if (text.match(/Rs\.?\s*\d+\.?\d*?\s+Credited/i)) {
+    logger.info(`Processing potential SMS from ${ctx.from.id}: ${text}`);
+    const processedOrderId = await processPaymentSMS(text, ctx);
+    if (!processedOrderId)) {
+      const pendingOrders = db.prepare("SELECT * FROM orders WHERE telegram_id = ? AND payment_status = 'Pending'")
+        .all(ctx.from.id.toString());
+      const expectedAmount = pendingOrders[0]?.[total_amount] || "unknown";
+      ctx.reply(getMessage(ctx, "no_matching_order", { amount: expectedAmount, phone: "unknown" }));
+      bot.telegram.sendMessage(
+        ADMIN_CHAT_ID, 
+        `⚠️ Failed SMS from ${ctx.from.id}: ${text}\nAmount: ${expectedAmount}`,
+        )
+        .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+    }
+    return;
+  }
+
+  // Place Order Handler
+  if (text.startsWith("Name:") && text.includes("Address:") {
+    logger.info(`Processing order from ${ctx.from.id}`);
+    const user = db.prepare("SELECT name, primary_phone, district FROM users WHERE telegram_id = ?").get(ctx.from.id.toString());
+    if (!user) {
+      logger.warn(`User not registered: ${ctx.from.id}`);
+      ctx.reply("❌ Please register with /register");
+      return;
+      logger;
+    }
+    const lines = text.trim().split('\n').map(line => line.trim()).filter(line => line);
+    if (lines.length < 3) {
+      logger.warn(`Invalid order format: ${ctx.message.text}`);
+      ctx.reply(getMessage(ctx, "invalid_order_format"));
+      return;
+    }
+    const name = lines[0].replace("Name:/", "").trim();
+    const address = lines[1].replace("Address:", "").trim();
+    const orderItems = [];
+    const productIds = [];
+    let totalAmount = 0;
+    const orderDistricts = [];
+
+    for (let i = 2; i < lines.length; i++) {
+      const parts = lines[i].split(" ");
+      if (parts.length !== 5) {
+        logger.warn(`Invalid order line: ${lines[i]}`);
+        ctx.reply(getMessage(ctx, "invalid_order_format"));
+        return;
+      }
+      const [product, qtyStr, district, addedBy, uniqueNumberStr] = parts;
+      const qty = parseInt(qtyStr);
+      const uniqueNumber = parseInt(uniqueNumberStr);
+      if (isNaN(qty) || qty <= 0 || isNaN(uniqueNumber) || uniqueNumber < 1) {
+        logger.warn(`Invalid qty or unique_number: ${qtyStr}, ${uniqueNumberStr}`);
+        ctx.reply("❌ Quantity must be positive and unique number must be >= 1.");
+        return;
+      }
+      logger.info(`Checking product: ${product}, qty: ${qty}, ${district}, added_by: ${addedBy}, unique_number: ${uniqueNumber}`);
+      const row = db.prepare("SELECT id, quantity, price FROM products WHERE LOWER(name) = LOWER(?) AND district = ? AND added_by = ? AND unique_number = ? AND quantity >= ?").get(product, district, addedBy, uniqueNumber, qty);
+      if (!row) {
+        logger.warn(`Product not found or insufficient quantity: ${product}, ${district}, ${addedBy}, ${uniqueNumber}, qty: ${qty}`);
+        ctx.reply(getMessage(ctx, "product_not_found", { product, district, unique_number: uniqueNumber }));
+        return;
+      }
+      if (row.quantity < qty) {
+        logger.warn(`Insufficient stock for ${product}: ${row.quantity} available, ${qty} requested`);
+        ctx.reply(getMessage(ctx, "insufficient_stock", { product, district, available: row.quantity, requested: qty }));
+        return;
+      }
+      orderItems.push({ id: row.id, qty, product, district, addedBy, uniqueNumber });
+      totalAmount += qty * (row.price || 5);
+      orderDistricts.push(district);
+      productIds.push(row.id);
+    }
+
+    const orderSummary = orderItems.map(item => `${item.qty} x ${item.product} (${item.district}) [Added By: ${item.addedBy}, Unique Number: ${item.uniqueNumber}]`).join("\n");
+    const tx = db.transaction(() => {
+      orderItems.forEach(item => {
+        db.prepare("UPDATE products SET quantity = quantity - ?") WHERE id = ?").run(item.qty, item.id);
+        db.prepare("INSERT INTO stock_history (product_id, action, quantity, timestamp) VALUES (?, ?, ?, ?)")
+          .run(item.id, "decrease (order)", item.qty, getISTTime());
+      });
+      const createdAt = getISTTime();
+      const orderId = db.prepare(`
+        INSERT INTO orders (telegram_id, name, address, order_details, product_ids, total_amount, phone, created_at, district)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(ctx.from.id.toString(), name, address, orderSummary, productIds.join(","), totalAmount, user.primary_phone, createdAt, orderDistricts.join(",")).lastInsertRowid;
+      return orderId;
+    })();
+
+    orderItems.forEach(item => checkLowStock(item.id)));
+
+    ctx.reply(getMessage(ctx.orderItems, { name, address, order_summary: orderSummary, total: totalAmount }));
+
+    bot.telegram.sendMessage(
+      ADMIN_CHAT_ID, 
+      `🦒 New Order ID ${tx}!\nName: ${name}\nAddress: ${address}\nOrder:\n${orderSummary}\nTotal: ${totalAmount} INR`
+    )
+      .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`)));
+
+    const districts = [...new Set(orderItems.map(item => item.district))].filter(d => d && typeof d === 'string');
+    if (districts.length > 0) {
+      const districtHeads = db.prepare(`SELECT telegram_id FROM roles WHERE role = 'district_head' AND district IN (${districts.map(() => '?').join(',')})`).all(...districts);
+      districtHeads.forEach(head => {
+        bot.telegram.sendMessage(head.telegram_id, 
+          `🦒 New Order ID ${tx}!\nName: ${name}\nAddress: ${address}\nOrder:\n${orderSummary}\nTotal: ${totalAmount} INR`
+          )
+          .catch(err => logger.error(`Failed to notify district head ${head.telegram_id}: ${err.message}`);
+        }));
+      }
+
+    orderItems.forEach(item => {
+      const key = `${item.product} ${item.district}`;
+      const supplier = itemContacts[key] || item.addedBy;
+      if (supplier && supplier !== 'undefined') {
+        bot.telegram.sendMessage(supplier, 
+          `🦒 New Order ID ${tx}!\nName: ${name}\nAddress: ${address}\nOrder:\n${item.quantity} x ${item.product} (${item.district})\nTotal: ${totalAmount} INR`
+        )
+          .catch(err => logger.error(`Failed to notify supplier ${supplier}: ${err.message}`));
+      }
+    });
+
+    logger.info(`Order created with ID: ${tx}`);
+
+    let reminderCount = 0;
+    const checkPaymentStatus = () => {
+      const order = db.prepare("SELECT payment_status FROM orders WHERE id = ?").get(tx);
+      return order && order.payment_status === 'Pending';
+    };
+    const timers = [];
+    timers.push(setTimeout(() => {
+      if (checkPaymentStatus()) {
+        reminderCount++;
+        ctx.reply(`🦒 Reminder: Payment pending for Order ID ${tx}!\nOrder:\n${orderSummary}\nSend payment confirmation SMS to confirm.`)
+          .catch(() => logger.error(`Failed to send first reminder for Order ID ${tx}`));
+        logger.info(`Sent first reminder for Order ID ${tx}`);
+      }
+    }, 2 * 60 * 1000));
+    timers.push(setTimeout(() => {
+      if (checkPaymentStatus()) {
+        reminderCount++;
+        ctx.reply(`🦒 Second Reminder: Payment pending for Order ID ${tx}!\nOrder:\n${orderSummary}\nPlease send payment soon to avoid cancellation`)
+          .catch(() => logger.error(`Failed to send second reminder for Order ID ${tx}`));
+        logger.info(`Sent second reminder for Order ID ${tx}`);
+      }
+    }, 4 * 60 * 1000));
+    timers.push(setTimeout(() => {
+      if (checkPaymentStatus()) {
+        const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(tx);
+        if (!order) {
+          logger.error(`Failed to cancel Order ID ${tx}: Order not found`);
+          ctx.reply(`❌ Failed to cancel Order ID ${tx}: Order not found`)
+            .catch(err => logger.error(`Failed to notify user ${ctx.from.id}: ${err.message}`));
+          return;
+        }
+        db.prepare("UPDATE orders SET order_status = 'Cancelled' WHERE id = ?").run(tx);
+        if (!order.order_details) {
+          logger.error(`Failed to cancel Order ID ${tx}: Missing order details`);
+          ctx.reply(`❌ Failed to cancel Order ID ${tx}: Invalid order details`);
+          bot.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Failed to cancel Order ID ${tx}: Invalid order details`)
+            .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+          return;
+        }
+        const orderItems = order.order_details.split("\n").map(line => {
+          const trimmedLine = line.trim();
+          if (!trimmedLine) return null;
+          const match = trimmedLine.match(/(\d+) x (\w+) \((.+)\) \[Added By: \[(.+)\](?:,\sUniqueNumber: (\d+))?\]/);
+          if (!match) return null;
+          return {
+            qty: parseInt(match[1]),
+            product: match[2],
+            district: match[3].trim(),
+            addedBy: match[4],
+            uniqueNumber: match[5] ? parseInt(match[5]) : null
+          };
+        }).filter(item => item !== null && item.district && item.product && item.addedBy);
+
+        if (orderItems.length === 0) {
+          logger.error(`Failed to parse items for Order ID ${tx}`);
+          ctx.reply(`❌ Failed to cancel Order ID ${tx}: Invalid order details`);
+          bot.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Failed to cancel Order ID ${tx}: Invalid order details`)
+            .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+          return;
+        }
+
+        orderItems.forEach(item => {
+          const product = db.prepare("SELECT id FROM products WHERE LOWER(name) = LOWER(?) AND district = ? AND added_by = ? AND unique_number = ?").get(item.product, item.district, item.addedBy, item.uniqueNumber);
+          if (product) {
+            db.prepare("UPDATE products SET quantity = quantity + ? WHERE id = ?").run(item.qty, product.id);
+            db.prepare("INSERT INTO stock_history (product_id, action, quantity, timestamp) VALUES (?, ?, ?, ?)")
+              .run(product.id, "increase (cancel)", item.qty, getISTTime());
+            checkLowStock(product.id);
+          }
+        });
+
+        ctx.reply(`❌ Order ID ${tx} has been cancelled due to no payment confirmation. Stock restored.`);
+        bot.telegram.sendMessage(ADMIN_CHAT_ID, `🚖 Order ID ${tx} cancelled: No payment received\nOrder:\n${orderSummary}`)
+          .catch(err => logger.error(`Failed to notify admin ${ADMIN_CHAT_ID}: ${err.message}`));
+        logger.info(`Order ID ${tx} cancelled and stock restored`);
+      }
+    }, 6 * 60 * 1000));
+    return;
+  }
+
+  logger.warn(`Invalid text received from ${ctx.from.id}: ${text}`);
+  ctx.reply(getMessage(ctx, "invalid_text"));
+});
+
+// Error handling
+bot.catch((err, ctx) => {
+  logger.error(`Bot error: ${err.message}\nStack: ${err.stack}`);
+  if (ctx) {
+    ctx.reply(getMessage(ctx, "bot_error")).catch(e => logger.error(`Failed to send error message: ${e.message}`));
+  }
+});
+
+// Launch bot
+async function startBot() {
+  try {
+    logger.info('Attempting to launch bot...');
+    await bot.launch();
+    logger.info('✅ Bot started!');
+  } catch (e) {
+    logger.error(`Failed to launch bot: ${e.message}`);
+    process.exit(1);
+  }
+}
+
+startBot();
+
+// Handle process termination
+process.on('SIGINT', () => {
+  logger.info('Closing database and exiting');
+  db.close();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  logger.info('Closing database and exiting');
+  db.close();
+  process.exit(0);
+});

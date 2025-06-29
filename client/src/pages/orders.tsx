@@ -15,9 +15,9 @@ import { getCurrentUser, hasRole } from "@/lib/auth";
 
 export default function Orders() {
   const [searchTerm, setSearchTerm] = useState("");
-  const [orderStatusFilter, setOrderStatusFilter] = useState("");
-  const [paymentStatusFilter, setPaymentStatusFilter] = useState("");
-  const [districtFilter, setDistrictFilter] = useState("");
+  const [orderStatusFilter, setOrderStatusFilter] = useState("all");
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState("all");
+  const [districtFilter, setDistrictFilter] = useState("all");
   const [isModalOpen, setIsModalOpen] = useState(false);
   
   const { toast } = useToast();
@@ -50,9 +50,9 @@ export default function Orders() {
   const filteredOrders = orders.filter((order: any) => {
     const matchesSearch = order.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          order.phone.includes(searchTerm);
-    const matchesOrderStatus = !orderStatusFilter || order.orderStatus === orderStatusFilter;
-    const matchesPaymentStatus = !paymentStatusFilter || order.paymentStatus === paymentStatusFilter;
-    const matchesDistrict = !districtFilter || order.district === districtFilter;
+    const matchesOrderStatus = !orderStatusFilter || orderStatusFilter === 'all' || order.orderStatus === orderStatusFilter;
+    const matchesPaymentStatus = !paymentStatusFilter || paymentStatusFilter === 'all' || order.paymentStatus === paymentStatusFilter;
+    const matchesDistrict = !districtFilter || districtFilter === 'all' || order.district === districtFilter;
     
     return matchesSearch && matchesOrderStatus && matchesPaymentStatus && matchesDistrict;
   });
@@ -136,7 +136,7 @@ export default function Orders() {
                 <SelectValue placeholder="All Orders" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Orders</SelectItem>
+                <SelectItem value="all">All Orders</SelectItem>
                 <SelectItem value="Processing">Processing</SelectItem>
                 <SelectItem value="Packed">Packed</SelectItem>
                 <SelectItem value="Delivered">Delivered</SelectItem>
@@ -148,18 +148,18 @@ export default function Orders() {
                 <SelectValue placeholder="All Payments" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Payments</SelectItem>
+                <SelectItem value="all">All Payments</SelectItem>
                 <SelectItem value="Pending">Pending</SelectItem>
                 <SelectItem value="Confirmed">Confirmed</SelectItem>
                 <SelectItem value="Failed">Failed</SelectItem>
               </SelectContent>
             </Select>
-            <Select value="" onValueChange={() => {}}>
+            <Select value="all" onValueChange={() => {}}>
               <SelectTrigger>
                 <SelectValue placeholder="All Time" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Time</SelectItem>
+                <SelectItem value="all">All Time</SelectItem>
                 <SelectItem value="today">Today</SelectItem>
                 <SelectItem value="week">This Week</SelectItem>
                 <SelectItem value="month">This Month</SelectItem>
@@ -170,7 +170,7 @@ export default function Orders() {
                 <SelectValue placeholder="All Districts" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Districts</SelectItem>
+                <SelectItem value="all">All Districts</SelectItem>
                 <SelectItem value="SouthDelhi">South Delhi</SelectItem>
                 <SelectItem value="CentralDelhi">Central Delhi</SelectItem>
                 <SelectItem value="NorthDelhi">North Delhi</SelectItem>

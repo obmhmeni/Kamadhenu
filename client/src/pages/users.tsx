@@ -15,8 +15,8 @@ import { getCurrentUser, hasRole } from "@/lib/auth";
 
 export default function Users() {
   const [searchTerm, setSearchTerm] = useState("");
-  const [roleFilter, setRoleFilter] = useState("");
-  const [districtFilter, setDistrictFilter] = useState("");
+  const [roleFilter, setRoleFilter] = useState("all");
+  const [districtFilter, setDistrictFilter] = useState("all");
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
   
@@ -31,8 +31,8 @@ export default function Users() {
     const matchesSearch = user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          user.primaryPhone.includes(searchTerm) ||
                          user.telegramId.includes(searchTerm);
-    const matchesRole = !roleFilter || user.roles.some((role: any) => role.role === roleFilter);
-    const matchesDistrict = !districtFilter || user.district === districtFilter;
+    const matchesRole = !roleFilter || roleFilter === 'all' || user.roles.some((role: any) => role.role === roleFilter);
+    const matchesDistrict = !districtFilter || districtFilter === 'all' || user.district === districtFilter;
     
     return matchesSearch && matchesRole && matchesDistrict;
   });
@@ -116,7 +116,7 @@ export default function Users() {
                 <SelectValue placeholder="All Roles" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Roles</SelectItem>
+                <SelectItem value="all">All Roles</SelectItem>
                 <SelectItem value="admin">Admin</SelectItem>
                 <SelectItem value="district_head">District Head</SelectItem>
                 <SelectItem value="worker">Worker</SelectItem>
@@ -129,7 +129,7 @@ export default function Users() {
                 <SelectValue placeholder="All Districts" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Districts</SelectItem>
+                <SelectItem value="all">All Districts</SelectItem>
                 <SelectItem value="SouthDelhi">South Delhi</SelectItem>
                 <SelectItem value="CentralDelhi">Central Delhi</SelectItem>
                 <SelectItem value="NorthDelhi">North Delhi</SelectItem>
@@ -137,12 +137,12 @@ export default function Users() {
                 <SelectItem value="Shahdara">Shahdara</SelectItem>
               </SelectContent>
             </Select>
-            <Select value="" onValueChange={() => {}}>
+            <Select value="all" onValueChange={() => {}}>
               <SelectTrigger>
                 <SelectValue placeholder="All Time" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Time</SelectItem>
+                <SelectItem value="all">All Time</SelectItem>
                 <SelectItem value="today">Today</SelectItem>
                 <SelectItem value="week">This Week</SelectItem>
                 <SelectItem value="month">This Month</SelectItem>

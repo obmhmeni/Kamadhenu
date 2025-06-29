@@ -15,9 +15,9 @@ import { getCurrentUser, hasRole } from "@/lib/auth";
 
 export default function Products() {
   const [searchTerm, setSearchTerm] = useState("");
-  const [districtFilter, setDistrictFilter] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("");
-  const [stockFilter, setStockFilter] = useState("");
+  const [districtFilter, setDistrictFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [stockFilter, setStockFilter] = useState("all");
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   
@@ -45,10 +45,10 @@ export default function Products() {
 
   const filteredProducts = products.filter((product: any) => {
     const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesDistrict = !districtFilter || product.district === districtFilter;
-    const matchesCategory = !categoryFilter || product.category === categoryFilter;
+    const matchesDistrict = !districtFilter || districtFilter === 'all' || product.district === districtFilter;
+    const matchesCategory = !categoryFilter || categoryFilter === 'all' || product.category === categoryFilter;
     const stockStatus = getStockStatus(product.quantity);
-    const matchesStock = !stockFilter || stockStatus.status === stockFilter;
+    const matchesStock = !stockFilter || stockFilter === 'all' || stockStatus.status === stockFilter;
     
     return matchesSearch && matchesDistrict && matchesCategory && matchesStock;
   });
@@ -130,7 +130,7 @@ export default function Products() {
                 <SelectValue placeholder="All Districts" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Districts</SelectItem>
+                <SelectItem value="all">All Districts</SelectItem>
                 <SelectItem value="SouthDelhi">South Delhi</SelectItem>
                 <SelectItem value="CentralDelhi">Central Delhi</SelectItem>
                 <SelectItem value="NorthDelhi">North Delhi</SelectItem>
@@ -143,7 +143,7 @@ export default function Products() {
                 <SelectValue placeholder="All Categories" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Categories</SelectItem>
+                <SelectItem value="all">All Categories</SelectItem>
                 <SelectItem value="vegetables">Vegetables</SelectItem>
                 <SelectItem value="grains">Grains</SelectItem>
                 <SelectItem value="snacks">Snacks</SelectItem>
@@ -154,7 +154,7 @@ export default function Products() {
                 <SelectValue placeholder="All Items" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Items</SelectItem>
+                <SelectItem value="all">All Items</SelectItem>
                 <SelectItem value="low">Low Stock</SelectItem>
                 <SelectItem value="out">Out of Stock</SelectItem>
                 <SelectItem value="available">Available</SelectItem>
